@@ -1,0 +1,328 @@
+---
+title: "Bellabeat Case Study – Marketing Analysis"
+author: "Everton"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+  pdf_document: default
+  word_document: default
+params:
+  product: "Time"   # Choose one: App, Leaf, Time, Spring, Membership
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+library(tidyverse)
+library(janitor)
+library(lubridate)
+library(skimr)
+library(readr)
+library(here)
+```
+
+# Ask
+
+**Business task**  
+- Bellabeat needs an analysis of consumer usage data from non-Bellabeat smart devices.  
+- Goal: identify usage patterns and apply insights to one Bellabeat product (App, Leaf, Time, Spring, Membership).  
+- Findings will support marketing strategies and future expansion.
+
+**Stakeholders**  
+- Urška Sršen (Cofounder & Chief Creative Officer)  
+- Sando Mur (Cofounder & Executive Team Member)  
+- Bellabeat Marketing Analytics Team
+
+**Key questions**  
+- What problem is Bellabeat trying to solve?  
+  - Expand business using data-driven marketing insights from customer usage of non-Bellabeat devices.  
+
+- How can insights drive business decisions?  
+  - Guide marketing strategies and identify opportunities for growth.
+
+# Prepare
+
+```{r data_import}
+activity_raw <- read_csv("data_raw/dailyActivity_merged.csv")
+sleep_raw    <- read_csv("data_raw/sleepDay_merged.csv")
+steps_hour   <- read_csv("data_raw/hourlySteps_merged.csv")
+
+glimpse(activity_raw)
+glimpse(sleep_raw)
+glimpse(steps_hour)
+```
+
+```{r data_quality}
+activity_raw %>% skim()
+sleep_raw %>% skim()
+
+activity_raw %>% get_dupes(Id, ActivityDate)
+sleep_raw    %>% get_dupes(Id, SleepDay)
+
+colSums(is.na(activity_raw))
+colSums(is.na(sleep_raw))
+```
+
+```{r data_profile}
+profile_activity <- activity_raw %>%
+  mutate(ActivityDate = mdy(ActivityDate)) %>%
+  summarise(
+    users = n_distinct(Id),
+    start = min(ActivityDate, na.rm = TRUE),
+    end   = max(ActivityDate, na.rm = TRUE),
+    rows  = n(),
+    dupes = n() - n_distinct(paste(Id, ActivityDate))
+  )
+
+profile_sleep <- sleep_raw %>%
+  mutate(SleepDay = mdy_hms(SleepDay)) %>%
+  summarise(
+    users = n_distinct(Id),
+    start = as_date(min(SleepDay, na.rm = TRUE)),
+    end   = as_date(max(SleepDay, na.rm = TRUE)),
+    rows  = n(),
+    dupes = n() - n_distinct(paste(Id, as_date(SleepDay)))
+  )
+
+profile_hourly <- steps_hour %>%
+  mutate(ActivityHour = mdy_hms(ActivityHour)) %>%
+  summarise(
+    users = n_distinct(Id),
+    start = min(ActivityHour, na.rm = TRUE),
+    end   = max(ActivityHour, na.rm = TRUE),
+    rows  = n()
+  )
+
+list(
+  daily_activity_profile = profile_activity,
+  sleep_profile          = profile_sleep,
+  hourly_steps_profile   = profile_hourly,
+  na_counts = list(
+    activity = sapply(activity_raw, function(x) sum(is.na(x))),
+    sleep    = sapply(sleep_raw, function(x) sum(is.na(x))),
+    hourly   = sapply(steps_hour, function(x) sum(is.na(x)))
+  )
+)
+
+```
+
+
+**Data source, credibility, licensing, and known limitations**
+
+**Source & licensing.**
+This project uses the public Fitbit Fitness Tracker Data (commonly referenced as “FitBit Fitness Tracker Data” on Kaggle). The dataset is credited to Möbius and is released under a CC0 / Public Domain license, which permits reuse for analysis and educational purposes. The files are anonymized CSV exports collected from a small cohort of consumer Fitbit users.
+
+**What these data represent.**
+The tables contain daily-, hourly-, and (in some files) minute-level activity and sleep logs for a set of unique users. For this analysis I focus on:
+
+dailyActivity_merged.csv (daily activity, distance, and calories)
+
+sleepDay_merged.csv (daily sleep totals)
+
+hourlySteps_merged.csv (steps at an hourly granularity)
+
+**Credibility & fit for purpose.**
+Although the data come from real consumer devices, they were gathered from a convenience sample of volunteer users rather than a randomized, representative panel. The dataset is therefore best suited for exploratory insights and pattern-finding, not population-level inference. It remains useful for Bellabeat’s goal here: to understand how people engage with wearables (e.g., relative differences by weekday/weekend, typical ranges of steps, sleep consistency), which can inspire product and marketing hypotheses.
+
+**Known limitations & data quality notes.**
+
+_Small sample size & selection bias_. The number of users is limited (dozens, not hundreds/thousands), and participants are likely more health/tech-oriented than the general population. Insights may not generalize broadly.
+
+_Time window & seasonality_. The logs cover only a few weeks, so we cannot assess seasonality or long-term behavior changes.
+
+_Granularity mismatch_. Activity is available daily and hourly; sleep is summarized daily. Joining across tables requires careful date alignment (e.g., treating sleep as belonging to the date it ended vs. started).
+
+_Duplicates & inconsistencies_. Some tables (notably sleep) include duplicate rows for the same user-date; these must be deduplicated before analysis.
+
+_Time zone & timestamps_. Timestamps are provided without explicit time zones. In this analysis, timestamps are treated as local time; cross-user time-zone effects are ignored.
+
+_Device/app differences_. Logging behavior (e.g., manual vs. automatic tracking) may vary by user/device settings, introducing measurement noise.
+
+**Privacy.**
+User identifiers are anonymized (Id); no personally identifiable information is present.
+
+**Implications for the analysis.**
+Given these constraints, findings will be framed as directional. I will emphasize relative patterns (e.g., weekends vs. weekdays, relationships between steps and calories, the role of sleep) that can inform marketing hypotheses for Bellabeat’s r params$product, rather than definitive causal claims.
+
+# Process
+
+```{r cleaning}
+# Clean activity
+activity <- activity_raw %>%
+  clean_names() %>%
+  mutate(
+    activity_date = mdy(activity_date),
+    active_minutes = very_active_minutes + fairly_active_minutes + lightly_active_minutes
+  ) %>%
+  distinct(id, activity_date, .keep_all = TRUE)
+
+# Clean sleep
+sleep <- sleep_raw %>%
+  clean_names() %>%
+  mutate(
+    sleep_day = mdy_hms(sleep_day),
+    sleep_date = as_date(sleep_day)
+  ) %>%
+  distinct(id, sleep_date, .keep_all = TRUE)
+
+# Clean hourly
+hourly <- steps_hour %>%
+  clean_names() %>%
+  mutate(activity_hour = mdy_hms(activity_hour)) %>%
+  distinct(id, activity_hour, .keep_all = TRUE)
+
+# Join activity + sleep
+daily <- activity %>%
+  left_join(
+    sleep %>% select(id, sleep_date, total_minutes_asleep, total_time_in_bed),
+    by = c("id", "activity_date" = "sleep_date")
+  )
+
+# Save cleaned datasets
+dir.create("data/clean", showWarnings = FALSE, recursive = TRUE)
+write_csv(activity, "data/clean/activity_clean.csv")
+write_csv(sleep,    "data/clean/sleep_clean.csv")
+write_csv(daily,    "data/clean/daily_clean.csv")
+write_csv(hourly,   "data/clean/hourly_clean.csv")
+```
+
+**Cleaning log and rationale**
+
+**Standardize column names and parse dates.**
+I applied clean_names() to ensure all column names use consistent snake_case formatting. Date/time columns (activity_date, sleep_day, activity_hour) were parsed with mdy() / mdy_hms() / as_date() to ensure they are proper date objects for analysis and joining.
+
+**Deduplicate records (by user + date/time).**
+
+_Daily activity_: duplicates were removed using distinct(id, activity_date, .keep_all = TRUE) to ensure only one record per user per day.
+
+_Sleep_: duplicates were removed using distinct(id, sleep_date, .keep_all = TRUE).
+
+_Hourly steps_: duplicates were removed using distinct(id, activity_hour, .keep_all = TRUE).
+
+Rationale: duplicates could inflate counts or bias daily/hourly summaries. Deduplicating by the key columns preserves all other variables.
+
+**Create derived fields.**
+
+sleep_date derived from sleep_day for joining with daily activity.
+
+active_minutes calculated as the sum of very_active_minutes, fairly_active_minutes, and lightly_active_minutes.
+
+Rationale: derived fields simplify analysis and allow combined metrics (like total activity per day).
+
+**Join tables at the daily level.**
+
+The daily dataset was created by joining activity with sleep on id and date.
+
+Rationale: this allows us to analyze activity and sleep together for each user/day.
+
+**Outlier handling.**
+
+Outliers were flagged (e.g., extremely high steps or calories) but not removed automatically.
+
+Rationale: keeping flagged outliers allows controlled analysis without discarding extreme but valid behavior.
+
+**Preserve missing values.**
+
+Missing values (NA) were kept in the cleaned datasets; summary functions use na.rm = TRUE when needed.
+
+Rationale: avoids introducing bias through imputation in exploratory analysis.
+
+**Save cleaned datasets.**
+
+Cleaned datasets are saved in data/clean/ to preserve reproducibility and allow future analysis without re-running the cleaning steps.
+
+# Analyze
+
+```{r features_and_eda}
+daily <- daily %>%
+  mutate(
+    weekday = wday(activity_date, label = TRUE, week_start = 1),
+    weekpart = if_else(weekday %in% c("Sat","Sun"), "weekend","weekday")
+  )
+
+# Descriptive stats
+daily %>% summarise(
+  users = n_distinct(id),
+  start_date = min(activity_date, na.rm = TRUE),
+  end_date   = max(activity_date, na.rm = TRUE),
+  avg_steps = mean(total_steps, na.rm = TRUE),
+  avg_calories = mean(calories, na.rm = TRUE),
+  avg_sleep = mean(total_minutes_asleep, na.rm = TRUE),
+  avg_active_minutes = mean(active_minutes, na.rm = TRUE)
+)
+
+# Correlations
+cor(daily$total_steps, daily$calories, use = "complete.obs")
+cor(daily$active_minutes, daily$calories, use = "complete.obs")
+cor(daily$total_minutes_asleep, daily$active_minutes, use = "complete.obs")
+
+# Visualizations
+ggplot(daily, aes(total_steps, calories)) +
+  geom_point(alpha = 0.4) +
+  geom_smooth(method = "lm", se = FALSE, color="blue") +
+  labs(title = "Steps vs. Calories", x = "Daily Steps", y = "Calories Burned")
+
+ggplot(daily, aes(active_minutes, calories)) +
+  geom_point(alpha = 0.4) +
+  geom_smooth(method = "lm", se = FALSE, color="red") +
+  labs(title = "Active Minutes vs. Calories", x = "Active Minutes", y = "Calories Burned")
+
+daily %>%
+  group_by(weekday) %>%
+  summarise(mean_steps = mean(total_steps, na.rm = TRUE)) %>%
+  ggplot(aes(weekday, mean_steps, group = 1)) +
+  geom_line() + geom_point() +
+  labs(title = "Average Steps by Weekday", x = "Weekday", y = "Average Steps")
+
+daily %>%
+  group_by(weekpart) %>%
+  summarise(mean_sleep = mean(total_minutes_asleep, na.rm = TRUE)) %>%
+  ggplot(aes(weekpart, mean_sleep, fill = weekpart)) +
+  geom_col() +
+  labs(title = "Average Sleep: Weekday vs Weekend", x = "", y = "Minutes Asleep") +
+  theme(legend.position = "none")
+
+```
+
+
+**Key findings and trends**  
+- Clear weekday vs weekend patterns in activity  
+- Daily steps and calories burned are strongly positively correlated  
+- Active minutes provide additional insight beyond total steps  
+- Higher activity does not necessarily increase sleep duration  
+- Patterns differ between weekdays and weekends
+
+# Share
+
+**Steps vs. Calories**  
+- Scatter plot shows positive relationship between steps and calories burned → can guide Bellabeat marketing to promote activity tracking
+
+**Average Steps by Weekday**  
+- Line chart shows weekend step counts are lower → marketing can target weekend engagement
+
+**General takeaway**  
+- Predictable activity patterns can inform personalized notifications, challenges, or features to increase engagement with the `r params$product`
+
+# Act
+
+**Recommendations**  
+- Encourage daily activity: personalized reminders or weekend-specific challenges to increase engagement with the `r params$product`  
+- Promote calorie-tracking & insights: highlight steps-calories relationship to motivate app usage  
+- Leverage weekday patterns for campaigns: rewards or badges for hitting step targets to strengthen engagement
+
+**Next steps**  
+- Collect detailed sleep stages (light, deep, REM)  
+- Track heart rate & stress metrics  
+- Collect app usage logs (frequency, feature engagement)
+
+**Experiments / A/B tests**  
+- Test marketing messages emphasizing steps vs calories → measure engagement  
+- Introduce weekend reminders → evaluate step count changes  
+- Launch sleep challenge → track retention and participation
+
+# Appendix
+
+```{r session_info}
+sessionInfo()
+```
